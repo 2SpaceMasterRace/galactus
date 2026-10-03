@@ -2,7 +2,10 @@
 
 **A reproducible experimentation system for building pretraining datasets and training small language models from scratch.**
 
-Galactus is a researcher-facing CLI and Python library for studying how data-engineering decisions affect language-model training. A user describes raw data sources, processing stages, model settings, and experiment variants. Galactus executes the pipeline, versions every artifact, trains controlled small models, and compares data quality, model quality, runtime, cost, and resource usage.
+Galactus is a reproducible experimentation system for constructing LLM pretraining datasets and training small language models from scratch. It connects data acquisition, extraction, deduplication, filtering, mixing, tokenization, packing, training, and evaluation behind one typed Python API and command-line interface.
+
+> [!IMPORTANT]
+> Galactus is under development. The commands and APIs below define the intended interface and are not yet implemented.
 
 The project treats the dataset as part of the model system rather than as an anonymous input file. Its central question is:
 
@@ -11,90 +14,112 @@ The project treats the dataset as part of the model system rather than as an ano
 Galactus is intended for two closely related roles:
 
 - **Pretraining research engineers** who want to test hypotheses about deduplication, filtering, data mixtures, tokenization, or packing without assembling a new pipeline for every experiment.
-- **Software engineers working on data infrastructure and data acquisition** who build reliable pipelines for collecting, extracting, deduplicating, filtering, mixing, versioning, and auditing the corpora used in model research.
+- **Software engineers working on data infrastructure** who build reliable pipelines for collecting, extracting, deduplicating, filtering, mixing, versioning, and auditing the corpora used in model research.
 
-## Intended User Experience
+**Features:**
 
-Typed Python will be Galactus's canonical API. Sources, stages, models, controls, and experiment variants will be represented by typed configuration objects that provide validation, IDE support, and a stable extension point for custom research logic. YAML experiment files will provide a concise declarative interface for routine runs; Galactus will parse and validate them into the same typed Python model rather than maintain a separate configuration system. The CLI will accept either representation and support explicit overrides.
+- Build complete pretraining pipelines from multiple raw text sources.
+- Remove exact, near-document, and repeated-line duplicates.
+- Combine heuristic rules and learned classifiers in cost-aware filter cascades.
+- Detect overlap between training documents and evaluation benchmarks.
+- Create explicit, versioned data mixtures.
+- Train byte-level BPE tokenizers and produce packed training shards.
+- Train small decoder-only models from random initialization.
+- Compare dataset variants under matched model and token budgets.
+- Trace final sequences back to their sources and processing decisions.
+- Measure corpus quality, model quality, throughput, storage, memory, GPU usage, and cost.
+- Run the same recipe locally or through a parallel execution backend.
+- Resume interrupted pipelines and reuse content-addressed artifacts.
 
-A proposed YAML experiment could look like this:
+## Installation
 
-```yaml
-name: dedup-and-filter-ablation
+Galactus will require Python 3.12 or newer. From a source checkout, the planned development installation is:
 
-sources:
-  - name: web
-    type: web_text
-    snapshot: "2026-01"
-  - name: reference
-    type: curated_text
-    version: "1.0"
-
-pipeline:
-  - extract
-  - normalize
-  - exact_dedup
-  - minhash_lsh_dedup
-  - heuristic_filter
-  - quality_filter
-  - mix
-  - train_tokenizer
-  - tokenize
-  - pack
-
-model:
-  architecture: decoder_only
-  parameters: 150M
-  initialization: random
-
-controls:
-  training_tokens: 1B
-  seed: 42
-
-variants:
-  - minimally_processed
-  - deduplicated
-  - fully_curated
+```shell
+uv sync --all-extras
+uv run galactus --help
 ```
 
-The corresponding workflow would be:
+CPU execution will support pipeline development and small sample runs. A CUDA-capable GPU will be optional for learned filters and required for practical model-training experiments. Distributed execution will remain optional.
 
-```bash
-galactus plan experiments/dedup-and-filter.yaml
-galactus run experiments/dedup-and-filter.yaml
-galactus status dedup-and-filter-ablation
-galactus compare dedup-and-filter-ablation
-galactus lineage dedup-and-filter-ablation --document DOC_ID
+## Quick start
+
+The demo processes a small web corpus, creates minimally processed, deduplicated, and fully curated variants, and trains the same small model on each.
+
+Plan the experiment without executing it:
+
+```shell
+uv run galactus plan examples/demo.yaml
 ```
 
-These commands are the target interface, not evidence that the implementation already exists. The course project will deliver a functional subset that runs the complete workflow locally and can parallelize expensive data stages when additional compute is available.
+The plan resolves the sources, stages, dependencies, artifact fingerprints, estimated storage, and available execution backend.
 
-## End-to-End System
+Run the pipeline and its training variants:
+
+```shell
+uv run galactus run examples/demo.yaml
+```
+
+Galactus will provide terminal visualizations for immediate feedback. An illustrative result looks like this:
 
 ```text
-Raw heterogeneous sources
-  -> acquisition and extraction
-  -> normalization into a shared document schema
-  -> exact, near-document, and line-level deduplication
-  -> heuristic and model-based filtering
-  -> benchmark decontamination
-  -> corpus analysis and explicit data mixing
-  -> tokenizer training and tokenization
-  -> deterministic sequence packing and sharding
-  -> controlled small-model pretraining from random initialization
-  -> data, model, systems, and cost comparison
+GALACTUS  demo                                                COMPLETE
+
+CORPUS FUNNEL
+  WARC records acquired                              10,000 |####################|
+  primary text extracted                              9,760 |###################-|
+  URL and exact duplicates removed                    8,660 |#################---|
+  MinHash/LSH near-duplicates removed                 7,760 |################----|
+  heuristic filters passed                            7,160 |##############------|
+  language and quality filters passed                 6,800 |##############------|
+  benchmark decontamination passed                    6,796 |##############------|
+
+  Repeated boilerplate lines removed                 84,200
+  Packed-token utilization                            98.4%
+
+CONTROLLED TRAINING
+  50M parameters | 100M tokens per variant | seed 42
+
+  Validation loss (lower is better)
+  minimally processed   3.50 |####################
+  deduplicated          3.31 |###################
+  fully curated         3.18 |##################
+
+  Loss over training
+  minimally processed   4.8 4.2 3.9 3.7 3.5 | █▆▄▃▂
+  deduplicated          4.7 4.1 3.7 3.5 3.3 | █▅▄▃▂
+  fully curated         4.7 4.0 3.6 3.3 3.2 | █▅▃▂▁
+
+PIPELINE TIME
+  extract       00:41 |########
+  deduplicate   01:36 |####################
+  filter        00:58 |############
+  tokenize      00:27 |######
+  pack          00:11 |##
+
+CONCLUSION
+  The fully curated corpus improved validation loss by 9.1% under
+  the same model architecture and training-token budget.
+
+ARTIFACTS
+  dataset       .galactus/runs/demo/datasets/fully-curated/
+  tokenizer     .galactus/runs/demo/tokenizer/
+  checkpoint    .galactus/runs/demo/checkpoints/fully-curated-final/
+  lineage       .galactus/runs/demo/lineage.json
+  report        .galactus/runs/demo/report.html
 ```
 
-Galactus will represent this workflow using six core abstractions:
+The displayed numbers demonstrate the output format; actual results will be measured from the selected data, pipeline, model, and hardware. Terminal reporting may also include tables, histograms, progress bars, filter-score distributions, duplicate-cluster summaries, sparklines, and resource-usage charts.
 
-- **Source:** A versioned raw collection and its acquisition metadata.
-- **Stage:** A deterministic or explicitly seeded transformation with declared inputs, outputs, parameters, and metrics.
-- **Artifact:** An immutable dataset, model checkpoint, manifest, tokenizer, or report produced by a stage.
-- **Variant:** One controlled change to a pipeline or training configuration.
-- **Run:** A concrete execution with an environment snapshot, logs, resource measurements, and artifact lineage.
-- **Comparison:** A report that evaluates variants under shared experimental controls.
+Open the interactive report or trace one document:
 
-Content-addressed artifacts and stage fingerprints will allow completed work to be cached and reused. Checkpointed stages will make interrupted runs resumable. Every final training sequence will retain enough metadata to trace it back to its source document and the decisions that transformed or retained it.
+```shell
+uv run galactus report demo --open
+uv run galactus lineage demo --document DOC_ID
+```
+
+The lineage view reports where the document originated, how it was extracted, which duplicate cluster it belonged to, every filter score and decision, its mixture assignment, token offsets, packed sequence, and the model runs that consumed it.
+
 
 ## Pipeline Scope
 
@@ -222,3 +247,7 @@ The final report will retain the required research-paper sections while presenti
 12. **Limitations and Future Work** — Course-scale constraints and the path toward a larger research platform.
 13. **Team Contributions and Reproducibility** — Individual responsibilities and exact reproduction procedure.
 14. **References** — Cited systems, methods, and related work.
+
+## License
+
+Galactus is licensed under the terms in [MIT](MIT). Input datasets and downloaded models retain their own licenses and usage restrictions.
